@@ -1,0 +1,206 @@
+在 iPhone 和 iPad 上「點擊沒反應」或「無法開始」，主要是因為 iOS Safari 的觸控與音訊安全限制。在行動裝置上，如果音訊載入失敗，有時會導致整個 JavaScript 執行緒卡死。
+
+此外，iOS 版本的 Safari 對於點擊事件（Click Event）與音訊解鎖有非常嚴格的規範。以下是專門為 iPhone/iPad 重新編寫的 「強制解鎖版」，我修改了核心邏輯以確保順暢執行：
+
+🛠️ 針對 iOS 的三大修復：
+觸控優化：加入 -webkit-tap-highlight-color 與 cursor: pointer，並確保點擊事件能立即被偵測。
+
+音訊強啟：在點擊「開始遊戲」時，同時發出「靜音播放」指令，解鎖系統對 bgm、scream 的限制。
+
+佈局自適應：防止 iPhone 螢幕過小導致按鈕重疊。
+
+📱 筲東校園經濟戰 (iOS/iPad 專用修復版)
+HTML
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>筲東校園經濟戰 - iOS版</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Orbitron:wght@700&display=swap');
+
+        :root { --skw-blue: #00a2ff; --skw-gold: #ffcc00; --danger: #ff0044; --success: #00ff88; }
+        
+        body { 
+            background: #050508; color: white; font-family: -apple-system, "微軟正黑體", sans-serif; 
+            margin: 0; padding: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center;
+            overflow: hidden; touch-action: manipulation;
+        }
+
+        #game-container {
+            width: 92vw; max-width: 850px; background: rgba(15, 25, 45, 0.98);
+            border: 2px solid var(--skw-blue); border-radius: 15px;
+            padding: 15px; display: flex; flex-direction: column;
+            position: relative; box-shadow: 0 0 30px rgba(0, 162, 255, 0.2);
+            box-sizing: border-box;
+        }
+
+        @media (min-width: 768px) {
+            #game-container { display: grid; grid-template-columns: 1fr 280px; gap: 20px; }
+        }
+
+        .boss-box { 
+            background: rgba(20, 30, 50, 0.8); border: 1px solid var(--skw-blue);
+            padding: 15px; border-radius: 12px; text-align: center; margin-bottom: 10px;
+        }
+
+        #boss-emoji { font-size: 50px; display: block; margin: 0 auto 10px; }
+        .boss-defeated { transform: rotate(180deg) scale(0.6); filter: grayscale(1); transition: 0.5s; }
+
+        .tr-meter { height: 12px; background: #222; border-radius: 6px; border: 1px solid #444; overflow: hidden; margin: 8px 0; }
+        #tr-bar { height: 100%; width: 85%; background: linear-gradient(90deg, var(--danger), #ff8800); transition: width 0.5s; }
+
+        .ed-panel { 
+            background: #000; border: 2px solid var(--skw-gold);
+            border-radius: 15px; padding: 15px; text-align: center;
+        }
+        .ed-val { font-family: 'Orbitron', sans-serif; font-size: 2.5em; color: var(--skw-gold); line-height: 1; }
+
+        .opt-btn {
+            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--skw-blue);
+            color: white; padding: 14px; margin: 6px 0; width: 100%;
+            cursor: pointer; font-size: 1em; border-radius: 8px; 
+            -webkit-appearance: none; -webkit-tap-highlight-color: transparent;
+        }
+        .opt-btn:active { background: var(--skw-blue); color: black; }
+
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.96); z-index: 100; border-radius: 13px;
+            display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;
+            text-align: center;
+        }
+
+        .hit-effect { animation: flash 0.3s; }
+        @keyframes flash { 0% { background: rgba(255,0,0,0.4); } 100% { background: transparent; } }
+    </style>
+</head>
+<body id="bg">
+
+<div id="game-container">
+    <div id="start-screen" class="overlay">
+        <h1 style="color:var(--skw-gold); font-family:'Black Ops One'; font-size: 2em; margin-bottom:10px;">筲東校園經濟戰</h1>
+        <p style="font-size: 0.9em; margin-bottom: 20px;">點擊下方按鈕解鎖音軌並開始</p>
+        <button id="real-start-btn" style="padding: 20px 40px; font-size: 1.2em; background:var(--skw-blue); color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">進入戰場</button>
+    </div>
+
+    <div id="end-screen" class="overlay" style="display:none;">
+        <h1 id="result-title" style="margin:0;">結算</h1>
+        <h2 id="final-score" style="font-size: 3.5em; color:var(--skw-gold); margin: 10px 0;">0</h2>
+        <button onclick="location.reload()" style="padding: 15px 30px; background:white; color:black; border:none; border-radius:8px; font-weight:bold;">重新挑戰</button>
+    </div>
+
+    <div class="main-play">
+        <div style="font-family: 'Orbitron'; color: var(--success); text-align: center; margin-bottom: 5px;">SCORE: <span id="current-score">0</span></div>
+        <div class="boss-box">
+            <span id="boss-emoji">👨‍🏫</span>
+            <div id="boss-speech" style="color: #00ffcc; font-size: 0.9em; min-height: 40px; display: flex; align-items: center; justify-content: center;">「校長正在觀察你的反應...」</div>
+            <div class="tr-meter"><div id="tr-bar"></div></div>
+            <div style="font-size: 0.7em; opacity: 0.6;">總收入 (Total Revenue)</div>
+        </div>
+        <div id="options-grid"></div>
+    </div>
+
+    <div class="stats-panel">
+        <div class="ed-panel">
+            <div style="font-size: 0.7em; color: var(--skw-gold);">彈性 (Ed)</div>
+            <div class="ed-val" id="ed-num">0.25</div>
+            <div id="status-text" style="color:var(--danger); font-size: 0.8em; font-weight:bold;">低彈性 INELASTIC</div>
+        </div>
+    </div>
+</div>
+
+<audio id="bgm" loop preload="auto" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-15.mp3"></audio>
+<audio id="scream" preload="auto" src="https://actions.google.com/sounds/v1/human_voices/man_scream_short.ogg"></audio>
+<audio id="fail" preload="auto" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+
+<script>
+    let currentM = 0;
+    let score = 0;
+    const bgm = document.getElementById('bgm');
+    const scream = document.getElementById('scream');
+    const fail = document.getElementById('fail');
+
+    const missions = [
+        { boss: "「校服只有校務處有賣。加價 50%！」", options: ["開放副廠生產 (增加替代品)", "向老師求情", "要求更好布料"], correct: 0, ed: 1.5 },
+        { boss: "「冷衫是校規必需品。再加價 30%！」", options: ["改為自由配搭 (變為非必需品)", "投訴冷衫太厚", "分期付款"], correct: 0, ed: 1.8 },
+        { boss: "「新價格明天立刻生效！」", options: ["爭取兩年緩衝期 (增加調整時間)", "寫信給家長會", "罷買襪子"], correct: 0, ed: 1.4 },
+        { boss: "「襪子只賣 $100，佔支出很小！」", options: ["證明佔基層學生預算極高", "印上校名", "減少功課"], correct: 0, ed: 1.3 },
+        { boss: "「全校服飾全面加價！」", options: ["針對『特定項目』找替代品", "接受加價", "要求校長減薪"], correct: 0, ed: 1.7 }
+    ];
+
+    // 核心修復：使用明確的 Event Listener
+    document.getElementById('real-start-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        // 必須在點擊瞬間啟動所有音訊，iOS 才會允許後續播放
+        bgm.play().catch(()=>{});
+        scream.play().then(() => { scream.pause(); scream.currentTime = 0; }).catch(()=>{});
+        fail.play().then(() => { fail.pause(); fail.currentTime = 0; }).catch(()=>{});
+        
+        document.getElementById('start-screen').style.display = 'none';
+        loadMission();
+    }, false);
+
+    function loadMission() {
+        const m = missions[currentM];
+        document.getElementById('boss-speech').innerText = m.boss;
+        document.getElementById('ed-num').innerText = "0.25";
+        document.getElementById('tr-bar').style.width = "85%";
+        document.getElementById('boss-emoji').className = "";
+        document.getElementById('status-text').innerText = "低彈性 INELASTIC";
+        document.getElementById('status-text').style.color = "var(--danger)";
+        
+        const grid = document.getElementById('options-grid');
+        grid.innerHTML = '';
+        m.options.forEach((opt, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'opt-btn';
+            btn.innerText = opt;
+            // 針對 iOS 優化的事件
+            btn.onclick = (e) => {
+                e.preventDefault();
+                check(i === m.correct, m.ed);
+            };
+            grid.appendChild(btn);
+        });
+    }
+
+    function check(isCorrect, edVal) {
+        document.querySelectorAll('.opt-btn').forEach(b => b.disabled = true);
+
+        if (isCorrect) {
+            score += 20;
+            document.getElementById('current-score').innerText = score;
+            scream.play().catch(()=>{});
+            document.getElementById('bg').classList.add('hit-effect');
+            document.getElementById('boss-emoji').className = "boss-defeated";
+            document.getElementById('ed-num').innerText = edVal;
+            document.getElementById('ed-num').style.color = "var(--success)";
+            document.getElementById('tr-bar').style.width = "20%";
+            document.getElementById('status-text').innerText = "高彈性 ELASTIC";
+            document.getElementById('status-text').style.color = "var(--success)";
+        } else {
+            fail.play().catch(()=>{});
+            document.getElementById('tr-bar').style.width = "95%";
+            alert("❌ 答錯了！該因素無法有效提升需求彈性。");
+        }
+
+        setTimeout(() => {
+            document.getElementById('bg').classList.remove('hit-effect');
+            currentM++;
+            if(currentM < missions.length) loadMission();
+            else showEndScreen();
+        }, 1200);
+    }
+
+    function showEndScreen() {
+        document.getElementById('end-screen').style.display = 'flex';
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('result-title').innerText = score >= 60 ? "🏆 守護成功" : "❄️ 守護失敗";
+    }
+</script>
+</body>
+</html>
